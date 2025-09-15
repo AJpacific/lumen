@@ -14,6 +14,9 @@ import Offers from './pages/User/Offers.jsx';
 import AdminDashboard from './pages/Admin/Dashboard.jsx';
 import ManagePlans from './pages/Admin/ManagePlans.jsx';
 import ManageDiscounts from './pages/Admin/ManageDiscounts.jsx';
+import ManageUsers from './pages/Admin/ManageUsers.jsx';
+import SendNotifications from './pages/Admin/SendNotifications.jsx';
+import UsageHistory from './pages/User/UsageHistory.jsx';
 import AuditLog from './pages/Admin/AuditLog.jsx';
 import Notification from './components/Notification.jsx';
 import './App.css';
@@ -66,10 +69,34 @@ function App() {
                   }
                 />
                 <Route
+                  path="/user/usage-history"
+                  element={
+                    <ProtectedRoute roles={['user']}>
+                      <UsageHistory />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
                   path="/admin/dashboard"
                   element={
                     <ProtectedRoute roles={['admin']}>
                       <AdminDashboard />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/admin/manage-users"
+                  element={
+                    <ProtectedRoute roles={['admin']}>
+                      <ManageUsers />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/admin/send-notifications"
+                  element={
+                    <ProtectedRoute roles={['admin']}>
+                      <SendNotifications />
                     </ProtectedRoute>
                   }
                 />

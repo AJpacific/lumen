@@ -2,12 +2,12 @@ import React from 'react';
 import useFetch from '../../hooks/useFetch.js';
 import { getAdminDashboard, getAnalytics, getDiscountUsage } from '../../services/adminService.js';
 import { getTopPlansByYear, getTopPlansCurrent } from '../../services/analyticsService.js';
-import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement, Title } from 'chart.js';
+import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement, Title, LineElement, PointElement } from 'chart.js';
 import { Pie, Bar } from 'react-chartjs-2';
 import chartConfig from '../../utils/chartConfig.js';
 import styles from '../../styles/dashboard.module.css';
 
-ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement, Title);
+ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement, Title, LineElement, PointElement);
 
 const AdminDashboard = () => {
   const { data: dashboard, loading: dashboardLoading, error: dashboardError } = useFetch(getAdminDashboard);
@@ -19,30 +19,60 @@ const AdminDashboard = () => {
   if (dashboardLoading) return <div className="loading"><div className="spinner"></div>Loading dashboard...</div>;
   if (dashboardError) return <div className="alert alert-error">Error loading dashboard: {dashboardError}</div>;
 
-  const { overview, topPlans, monthlyTrends, recentUsers, recentSubscriptions } = dashboard || {};
+  const { overview, topPlans, monthlyTrends, recentUsers, recentSubscriptions, revenueStats, subscriptionStatusBreakdown } = dashboard || {};
+
+  // Build status counts from backend breakdown
+  const statusCounts = (subscriptionStatusBreakdown || []).reduce((acc, row) => {
+    acc[row._id] = row.count;
+    return acc;
+  }, {});
+  const pieActive = statusCounts['active'] ?? overview?.activeSubscriptions ?? 0;
+  const pieCancelled = statusCounts['cancelled'] ?? 0;
+  const pieExpired = statusCounts['expired'] ?? 0;
+  const piePending = statusCounts['pending'] ?? 0;
 
   // Chart data for subscription status
   const subscriptionStatusData = {
     labels: ['Active', 'Cancelled', 'Expired', 'Pending'],
     datasets: [{
-      data: [
-        overview?.activeSubscriptions || 0,
-        analytics?.cancelled || 0,
-        analytics?.expired || 0,
-        analytics?.pending || 0
-      ],
+      data: [pieActive, pieCancelled, pieExpired, piePending],
       ...chartConfig.pie,
     }],
   };
 
-  // Chart data for monthly trends
+  // Prepare last 12 months labels
+  const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const now = new Date();
+  const last12 = Array.from({ length: 12 }).map((_, i) => {
+    const d = new Date(now.getFullYear(), now.getMonth() - (11 - i), 1);
+    return { year: d.getFullYear(), month: d.getMonth() + 1, label: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2,'0')}` };
+  });
+  const trendsIndex = new Map((monthlyTrends || []).map(t => [`${t._id.year}-${String(t._id.month).padStart(2,'0')}`, t]));
+  const monthlyLabels = last12.map(m => m.label);
+  const monthlyCounts = last12.map(m => trendsIndex.get(m.label)?.count || 0);
+  const monthlyRevenue = last12.map(m => trendsIndex.get(m.label)?.revenue || 0);
+
   const monthlyTrendsData = {
-    labels: monthlyTrends?.map(trend => `${trend._id.year}-${String(trend._id.month).padStart(2, '0')}`) || [],
-    datasets: [{
-      label: 'New Subscriptions',
-      data: monthlyTrends?.map(trend => trend.count) || [],
-      ...chartConfig.bar,
-    }],
+    labels: monthlyLabels,
+    datasets: [
+      {
+        type: 'bar',
+        label: 'New Subscriptions',
+        data: monthlyCounts,
+        ...chartConfig.bar,
+        yAxisID: 'y',
+      },
+      {
+        type: 'line',
+        label: 'Revenue',
+        data: monthlyRevenue,
+        borderColor: '#10B981',
+        backgroundColor: 'rgba(16, 185, 129, 0.15)',
+        borderWidth: 2,
+        tension: 0.3,
+        yAxisID: 'y1',
+      }
+    ],
   };
 
   return (
@@ -70,7 +100,7 @@ const AdminDashboard = () => {
             <p className={styles.statLabel}>Total Subscriptions</p>
           </div>
           <div className={`${styles.statCard} ${styles.success}`}>
-            <h3 className={styles.statValue}>${overview?.totalRevenue?.toFixed(2) || 0}</h3>
+            <h3 className={styles.statValue}>${(revenueStats?.totalMonthlyRevenue ?? 0).toFixed ? revenueStats.totalMonthlyRevenue.toFixed(2) : Number(revenueStats?.totalMonthlyRevenue || 0).toFixed(2)}</h3>
             <p className={styles.statLabel}>Monthly Revenue</p>
           </div>
   
@@ -92,7 +122,35 @@ const AdminDashboard = () => {
                 plugins: {
                   legend: {
                     position: 'bottom',
+                    labels: {
+                      generateLabels: (chart) => {
+                        const original = ChartJS.defaults.plugins.legend.labels.generateLabels(chart);
+                        const data = chart.data.datasets[0]?.data || [];
+                        const labels = chart.data.labels || [];
+                        const total = data.reduce((sum, v) => sum + (Number(v) || 0), 0);
+                        return original.map((item, i) => {
+                          const value = Number(data[i] || 0);
+                          const text = labels[i] ?? item.text ?? '';
+                          const pct = total ? ((value / total) * 100).toFixed(1) : '0.0';
+                          return { ...item, text: `${text} (${pct}%)` };
+                        });
+                      }
+                    }
                   },
+                  tooltip: {
+                    callbacks: {
+                      label: (context) => {
+                        const data = context.chart.data.datasets[0]?.data || [];
+                        const labels = context.chart.data.labels || [];
+                        const idx = context.dataIndex;
+                        const value = Number(context.raw) || 0;
+                        const total = data.reduce((sum, v) => sum + (Number(v) || 0), 0);
+                        const pct = total ? ((value / total) * 100).toFixed(1) : '0.0';
+                        const label = labels[idx] || '';
+                        return `${label}: ${value} (${pct}%)`;
+                      }
+                    }
+                  }
                 },
               }} />
             </div>
@@ -107,13 +165,20 @@ const AdminDashboard = () => {
                 maintainAspectRatio: false,
                 plugins: {
                   legend: {
-                    display: false,
+                    display: true,
                   },
                 },
                 scales: {
                   y: {
                     beginAtZero: true,
+                    title: { display: true, text: 'Subscriptions' }
                   },
+                  y1: {
+                    beginAtZero: true,
+                    position: 'right',
+                    grid: { drawOnChartArea: false },
+                    title: { display: true, text: 'Revenue ($)' }
+                  }
                 },
               }} />
             </div>
@@ -366,9 +431,12 @@ const AdminDashboard = () => {
             <a href="/admin/audit-log" className="btn btn-outline text-center">
               View Audit Logs
             </a>
-            <button className="btn btn-success text-center">
+            <a href="/admin/manage-users" className="btn btn-primary text-center">
+              Manage Users
+            </a>
+            <a href="/admin/send-notifications" className="btn btn-success text-center">
               Send Notifications
-            </button>
+            </a>
           </div>
         </div>
 

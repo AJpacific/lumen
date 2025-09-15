@@ -3,6 +3,10 @@ import useFetch from '../../hooks/useFetch.js';
 import { NotificationContext } from '../../context/NotificationContext.jsx';
 import { getUserDashboard } from '../../services/userService.js';
 import styles from '../../styles/dashboard.module.css';
+import { Chart as ChartJS, LineElement, PointElement, CategoryScale, LinearScale, Tooltip, Legend } from 'chart.js';
+import { Line } from 'react-chartjs-2';
+
+ChartJS.register(LineElement, PointElement, CategoryScale, LinearScale, Tooltip, Legend);
 
 const UserDashboard = () => {
   const { data: dashboard, loading, error } = useFetch(getUserDashboard);
@@ -11,7 +15,35 @@ const UserDashboard = () => {
   if (loading) return <div className="loading"><div className="spinner"></div>Loading dashboard...</div>;
   if (error) return <div className="alert alert-error">Error loading dashboard: {error}</div>;
 
-  const { activeSubscription, usageStats, upcomingBilling, unreadNotifications } = dashboard || {};
+  const { activeSubscription, usageStats, upcomingBilling, unreadNotifications, recentUsage } = dashboard || {};
+
+  // Build monthly usage over last 6 months from recentUsage if available
+  const monthLabels = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const now = new Date();
+  const last6 = Array.from({ length: 6 }).map((_, i) => new Date(now.getFullYear(), now.getMonth() - (5 - i), 1));
+  const recentByMonth = new Map((recentUsage || []).map(u => {
+    const d = new Date(u.date);
+    const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+    return [key, (recentUsage || []).filter(x => new Date(x.date).getFullYear() === d.getFullYear() && new Date(x.date).getMonth() === d.getMonth()).reduce((s, x) => s + (x.dataUsed || 0), 0)];
+  }));
+  const lineLabels = last6.map(d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`);
+  const lineData = lineLabels.map(k => recentByMonth.get(k) || 0);
+  const monthlyUsageData = {
+    labels: lineLabels.map(k => {
+      const [y,m] = k.split('-');
+      return `${monthLabels[Number(m)-1]} ${y}`;
+    }),
+    datasets: [
+      {
+        label: 'Data Used (GB)',
+        data: lineData,
+        borderColor: '#3B82F6',
+        backgroundColor: 'rgba(59,130,246,0.15)',
+        tension: 0.3,
+        fill: true,
+      }
+    ]
+  };
 
   return (
     <div className="container">
@@ -104,6 +136,14 @@ const UserDashboard = () => {
           <div className="card">
             <h2 className="text-xl font-semibold mb-4">Usage Statistics</h2>
             <div className="space-y-4">
+              <div className="h-48">
+                <Line data={monthlyUsageData} options={{
+                  responsive: true,
+                  maintainAspectRatio: false,
+                  plugins: { legend: { display: true } },
+                  scales: { y: { beginAtZero: true } }
+                }} />
+              </div>
               <div>
                 <div className="flex justify-between items-center mb-2">
                   <span className="text-sm font-medium">Data Usage</span>
@@ -193,9 +233,9 @@ const UserDashboard = () => {
             <a href="/user/offers" className="btn btn-success text-center">
               View Offers
             </a>
-            <button className="btn btn-outline text-center">
+            <a href="/user/usage-history" className="btn btn-outline text-center">
               View Usage History
-            </button>
+            </a>
           </div>
         </div>
       </div>

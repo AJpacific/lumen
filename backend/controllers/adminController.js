@@ -47,22 +47,68 @@ exports.getAllUsers = async (req, res) => {
 
     const total = await User.countDocuments(filter);
 
-    // Get subscription counts for each user
-    const usersWithStats = await Promise.all(
-      users.map(async (user) => {
-        const subscriptionCount = await Subscription.countDocuments({ userId: user._id });
-        const activeSubscriptionCount = await Subscription.countDocuments({ 
-          userId: user._id, 
-          status: 'active' 
-        });
-        
+    // Get subscriptions for all users in this page (avoids N+1 queries)
+    const userIds = users.map(u => u._id);
+    const subscriptions = await Subscription.find({ userId: { $in: userIds } })
+      .populate('planId', 'name price productType billingCycle downloadSpeed uploadSpeed')
+      .populate('discountApplied', 'code name type value')
+      .sort({ createdAt: -1 });
+
+    // Group subscriptions by userId
+    const subscriptionsByUser = new Map();
+    for (const id of userIds) subscriptionsByUser.set(String(id), []);
+    for (const sub of subscriptions) {
+      const key = String(sub.userId);
+      if (!subscriptionsByUser.has(key)) subscriptionsByUser.set(key, []);
+      subscriptionsByUser.get(key).push(sub);
+    }
+
+    // Build response with subscription details and counts
+    const usersWithStats = users.map((user) => {
+      const key = String(user._id);
+      const subs = (subscriptionsByUser.get(key) || []).map((s) => {
+        const sObj = s.toObject({ virtuals: true });
         return {
-          ...user.toObject(),
-          subscriptionCount,
-          activeSubscriptionCount
+          _id: sObj._id,
+          status: sObj.status,
+          startDate: sObj.startDate,
+          endDate: sObj.endDate,
+          nextBillingDate: sObj.nextBillingDate,
+          autoRenew: sObj.autoRenew,
+          lastPaymentDate: sObj.lastPaymentDate,
+          nextPaymentAmount: sObj.nextPaymentAmount,
+          totalPaid: sObj.totalPaid,
+          daysRemaining: sObj.daysRemaining,
+          isExpiringSoon: sObj.isExpiringSoon,
+          plan: sObj.planId ? {
+            _id: sObj.planId._id,
+            name: sObj.planId.name,
+            price: sObj.planId.price,
+            productType: sObj.planId.productType,
+            billingCycle: sObj.planId.billingCycle,
+            downloadSpeed: sObj.planId.downloadSpeed,
+            uploadSpeed: sObj.planId.uploadSpeed
+          } : null,
+          discount: sObj.discountApplied ? {
+            _id: sObj.discountApplied._id,
+            code: sObj.discountApplied.code,
+            name: sObj.discountApplied.name,
+            type: sObj.discountApplied.type,
+            value: sObj.discountApplied.value
+          } : null
         };
-      })
-    );
+      });
+
+      const activeSub = subs.find(s => s.status === 'active') || null;
+
+      return {
+        ...user.toObject(),
+        subscriptionCount: subs.length,
+        activeSubscriptionCount: subs.filter(s => s.status === 'active').length,
+        activeSubscription: activeSub,
+        subscriptions: subs
+      };
+    });
 
     res.json({
       success: true,

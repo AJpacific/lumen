@@ -2,6 +2,7 @@ import React, { useContext } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth.js';
 import logo from '../assets/logo.svg';
+import NotificationBell from './NotificationBell.jsx';
 
 const Navbar = () => {
   const { user, logout } = useAuth();
@@ -28,6 +29,7 @@ const Navbar = () => {
                 {user.role}
               </span>
             </div>
+            <NotificationBell />
             
             {user.role === 'user' && (
               <div className="flex items-center gap-4">
@@ -67,6 +69,12 @@ const Navbar = () => {
                   Dashboard
                 </Link>
                 <Link 
+                  to="/admin/manage-users" 
+                  className="hover:bg-blue-700 px-3 py-2 rounded transition-colors"
+                >
+                  Manage Users
+                </Link>
+                <Link 
                   to="/admin/manage-plans" 
                   className="hover:bg-blue-700 px-3 py-2 rounded transition-colors"
                 >
@@ -83,6 +91,12 @@ const Navbar = () => {
                   className="hover:bg-blue-700 px-3 py-2 rounded transition-colors"
                 >
                   Audit Log
+                </Link>
+                <Link 
+                  to="/admin/send-notifications" 
+                  className="hover:bg-blue-700 px-3 py-2 rounded transition-colors"
+                >
+                  Send Notifications
                 </Link>
               </div>
             )}

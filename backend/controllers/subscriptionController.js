@@ -41,12 +41,21 @@ exports.subscribe = async (req, res) => {
       });
     }
 
-    // Calculate subscription dates
+    // Calculate subscription dates based on billing cycle
     const startDate = new Date();
-    const endDate = new Date();
-    endDate.setMonth(endDate.getMonth() + (plan.contractLength || 1));
-
-    const nextBillingDate = new Date(endDate);
+    const cycleMonths = plan.billingCycle === 'monthly' ? 1 : plan.billingCycle === 'quarterly' ? 3 : plan.billingCycle === 'yearly' ? 12 : (plan.contractLength || 1);
+    const endDate = new Date(startDate);
+    endDate.setMonth(endDate.getMonth() + cycleMonths);
+    const nextBillingDate = new Date(startDate);
+    nextBillingDate.setMonth(nextBillingDate.getMonth() + cycleMonths);
+    // Normalize to same day-of-month where possible, fallback to end of month
+    if (startDate.getDate() !== nextBillingDate.getDate()) {
+      const desired = startDate.getDate();
+      const candidate = new Date(nextBillingDate.getFullYear(), nextBillingDate.getMonth(), desired);
+      if (!isNaN(candidate.getTime()) && candidate.getMonth() === nextBillingDate.getMonth()) {
+        nextBillingDate.setDate(desired);
+      }
+    }
     
     // Validate dates
     if (endDate <= startDate) {
@@ -63,6 +72,7 @@ exports.subscribe = async (req, res) => {
       startDate,
       endDate,
       nextBillingDate,
+      lastPaymentDate: startDate,
       autoRenew,
       billingAddress,
       paymentMethod: paymentMethod || 'credit_card',
@@ -309,6 +319,11 @@ exports.upgradeDowngrade = async (req, res) => {
     // Update subscription
     subscription.planId = newPlanId;
     subscription.nextPaymentAmount = newPlan.price;
+    // Recompute nextBillingDate from lastPaymentDate and new cycle
+    const newCycleMonths = newPlan.billingCycle === 'monthly' ? 1 : newPlan.billingCycle === 'quarterly' ? 3 : newPlan.billingCycle === 'yearly' ? 12 : (newPlan.contractLength || 1);
+    let newNextBilling = new Date(subscription.lastPaymentDate || subscription.startDate || new Date());
+    newNextBilling.setMonth(newNextBilling.getMonth() + newCycleMonths);
+    subscription.nextBillingDate = newNextBilling;
     subscription.notes = reason || subscription.notes;
 
     // Validate the updated subscription
@@ -480,14 +495,18 @@ exports.renew = async (req, res) => {
     // Calculate new end date
     const currentEndDate = new Date(subscription.endDate);
     const newEndDate = new Date(currentEndDate);
-    newEndDate.setMonth(newEndDate.getMonth() + (subscription.planId.contractLength || 1));
+    const cycleMonths = subscription.planId.billingCycle === 'monthly' ? 1 : subscription.planId.billingCycle === 'quarterly' ? 3 : subscription.planId.billingCycle === 'yearly' ? 12 : (subscription.planId.contractLength || 1);
+    newEndDate.setMonth(newEndDate.getMonth() + cycleMonths);
 
     // Update subscription
     subscription.endDate = newEndDate;
-    subscription.nextBillingDate = newEndDate;
+    let computedNextBilling = new Date(subscription.lastPaymentDate || subscription.startDate || new Date());
+    computedNextBilling.setMonth(computedNextBilling.getMonth() + cycleMonths);
+    subscription.nextBillingDate = computedNextBilling;
     subscription.status = 'active';
     subscription.autoRenew = true;
     subscription.nextPaymentAmount = subscription.planId.price;
+    subscription.lastPaymentDate = new Date();
 
     await subscription.save();
 

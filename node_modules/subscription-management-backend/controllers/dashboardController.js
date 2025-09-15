@@ -30,9 +30,10 @@ exports.getUserDashboard = async (req, res) => {
     }).sort({ date: -1 });
 
     // Calculate usage statistics
-    const totalUsage = recentUsage.reduce((sum, usage) => sum + usage.dataUsed, 0);
+    const totalUsage = recentUsage.reduce((sum, usage) => sum + (usage.dataUsed || 0), 0);
     const averageDailyUsage = recentUsage.length > 0 ? totalUsage / recentUsage.length : 0;
-    const peakUsage = recentUsage.length > 0 ? Math.max(...recentUsage.map(u => u.dataUsed)) : 0;
+    const peakUsage = recentUsage.length > 0 ? Math.max(...recentUsage.map(u => u.dataUsed || 0)) : 0;
+    const averageSpeed = recentUsage.length > 0 ? (recentUsage.reduce((s, u) => s + (u.averageSpeed || 0), 0) / recentUsage.length) : 0;
 
     // Calculate usage percentage if user has active subscription
     let usagePercentage = 0;
@@ -41,11 +42,24 @@ exports.getUserDashboard = async (req, res) => {
       usagePercentage = quota > 0 ? (totalUsage / quota) * 100 : 0;
     }
 
-    // Get upcoming billing information
+    // Get upcoming billing information with corrected next billing date based on billing cycle
     let upcomingBilling = null;
     if (activeSubscription) {
+      const nowDate = new Date();
+      let nextBilling = activeSubscription.nextBillingDate ? new Date(activeSubscription.nextBillingDate) : null;
+      const planCycle = activeSubscription.planId?.billingCycle;
+      const cycleMonths = planCycle === 'monthly' ? 1 : planCycle === 'quarterly' ? 3 : planCycle === 'yearly' ? 12 : 1;
+      const baseDate = activeSubscription.lastPaymentDate || activeSubscription.startDate || nowDate;
+      let candidate = new Date(baseDate);
+      candidate.setMonth(candidate.getMonth() + cycleMonths);
+      while (candidate <= nowDate) {
+        candidate.setMonth(candidate.getMonth() + cycleMonths);
+      }
+      // Always use computed candidate to avoid stale/wrong stored dates
+      nextBilling = candidate;
+
       upcomingBilling = {
-        nextBillingDate: activeSubscription.nextBillingDate,
+        nextBillingDate: nextBilling,
         amount: activeSubscription.nextPaymentAmount,
         autoRenew: activeSubscription.autoRenew
       };
@@ -64,6 +78,7 @@ exports.getUserDashboard = async (req, res) => {
           totalUsage: Math.round(totalUsage * 100) / 100,
           averageDailyUsage: Math.round(averageDailyUsage * 100) / 100,
           peakUsage: Math.round(peakUsage * 100) / 100,
+          averageSpeed: Math.round(averageSpeed * 100) / 100,
           usagePercentage: Math.round(usagePercentage * 100) / 100,
           daysWithData: recentUsage.length
         },
@@ -131,9 +146,19 @@ exports.getAdminDashboard = async (req, res) => {
     twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 12);
 
     const monthlyTrends = await Subscription.aggregate([
+      { $match: { createdAt: { $gte: twelveMonthsAgo } } },
       {
-        $match: {
-          createdAt: { $gte: twelveMonthsAgo }
+        $lookup: {
+          from: 'plans',
+          localField: 'planId',
+          foreignField: '_id',
+          as: 'plan'
+        }
+      },
+      { $unwind: { path: '$plan', preserveNullAndEmptyArrays: true } },
+      {
+        $addFields: {
+          effectiveAmount: { $ifNull: ['$nextPaymentAmount', '$plan.price'] }
         }
       },
       {
@@ -143,12 +168,10 @@ exports.getAdminDashboard = async (req, res) => {
             month: { $month: '$createdAt' }
           },
           count: { $sum: 1 },
-          revenue: { $sum: '$nextPaymentAmount' }
+          revenue: { $sum: { $ifNull: ['$effectiveAmount', 0] } }
         }
       },
-      {
-        $sort: { '_id.year': 1, '_id.month': 1 }
-      }
+      { $sort: { '_id.year': 1, '_id.month': 1 } }
     ]);
 
     // Get recent user registrations
@@ -164,14 +187,42 @@ exports.getAdminDashboard = async (req, res) => {
       .sort({ createdAt: -1 })
       .limit(10);
 
-    // Get revenue statistics
+    // Get revenue statistics (fallback to plan price when nextPaymentAmount is missing)
     const revenueStats = await Subscription.aggregate([
       { $match: { status: 'active' } },
       {
+        $lookup: {
+          from: 'plans',
+          localField: 'planId',
+          foreignField: '_id',
+          as: 'plan'
+        }
+      },
+      { $unwind: { path: '$plan', preserveNullAndEmptyArrays: true } },
+      {
+        $addFields: {
+          effectiveAmount: { $ifNull: ['$nextPaymentAmount', '$plan.price'] }
+        }
+      },
+      {
         $group: {
           _id: null,
-          totalMonthlyRevenue: { $sum: '$nextPaymentAmount' },
-          averageSubscriptionValue: { $avg: '$nextPaymentAmount' }
+          totalMonthlyRevenue: { $sum: { $ifNull: ['$effectiveAmount', 0] } },
+          averageSubscriptionValue: { $avg: { $ifNull: ['$effectiveAmount', 0] } },
+          activeCount: { $sum: 1 }
+        }
+      },
+      {
+        $project: {
+          _id: 0,
+          totalMonthlyRevenue: { $round: ['$totalMonthlyRevenue', 2] },
+          averageSubscriptionValue: {
+            $cond: [
+              { $gt: ['$activeCount', 0] },
+              { $round: ['$averageSubscriptionValue', 2] },
+              0
+            ]
+          }
         }
       }
     ]);
